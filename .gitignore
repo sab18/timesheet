@@ -1,3 +1,8 @@
+projects.yaml
+locations.yaml
+Timesheet_2025.xlsx
+config.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
