@@ -470,6 +470,8 @@ class Timesheet(tk.Tk):
     def is_valid_positive_number(self, value):
         if value == "":
             return True
+        if value.startswith("."):
+            value = "0" + value
         try:
             val = float(value)
             return val >= 0
