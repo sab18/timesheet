@@ -4,12 +4,13 @@ from tkcalendar import Calendar
 from openpyxl import Workbook, load_workbook
 import pandas as pd
 import yaml
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import math
 import json
 import os
 from tkinter import filedialog
 from collections import defaultdict
+from typing import Any, Dict
 
 from inputs import (yaml_file_path_projects, 
                     yaml_file_path_locations, 
@@ -19,6 +20,20 @@ from inputs import (yaml_file_path_projects,
 
                     headers_default_data_for_timesheet,
                     headers_default_data_daily_summaries)
+
+# Normalize any date-like input (string, date, datetime) to datetime.date
+def normalize_date_input(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        # pandas handles ISO 'YYYY-MM-DD' and 'MM/DD/YY' formats
+        try:
+            return pd.to_datetime(value).date()
+        except Exception:
+            pass
+    raise ValueError(f"Unable to parse date value: {value!r}")
 
 class ScrollableFrame(tk.Frame):
     def __init__(self, parent, *args, **kwargs):
@@ -63,11 +78,12 @@ class Timesheet(tk.Tk):
         self.font = "Cascadia Code"
         self.font_header = (self.font, 12, "bold")
         self.font_normal = (self.font, 10)
-        self.padding={"padx":10, "pady":10}
-        self.sticky_w = {"sticky":"w"}
-        self.sticky_e = {"sticky":"e"}
-        self.sticky_ew = {"sticky":"ew"}
-        self.sticky_all = {"sticky":"nsew"}
+        # Typed layout option dicts to satisfy static type checkers
+        self.padding: Dict[str, Any] = {"padx": 10, "pady": 10}
+        self.sticky_w: Dict[str, Any] = {"sticky": "w"}
+        self.sticky_e: Dict[str, Any] = {"sticky": "e"}
+        self.sticky_ew: Dict[str, Any] = {"sticky": "ew"}
+        self.sticky_all: Dict[str, Any] = {"sticky": "nsew"}
         
 
 
@@ -79,13 +95,20 @@ class Timesheet(tk.Tk):
         config = self.load_config()
         self.locations_yaml_path = config.get("locations_yaml", "locations.yaml")
         self.projects_yaml_path = config.get("projects_yaml", "projects.yaml")
-        self.timesheet_excel_path = config.get("timesheet_excel", "Timesheet_2025.xlsx")
+        self.fte_tracker_yaml_path = config.get("fte_tracker_yaml", "FTE_tracker.yaml")
+        self.timesheet_excel_path = config.get("timesheet_excel", "Timesheet_2026.xlsx")
 
         self.dict_projects = self.import_yaml(self.projects_yaml_path)
         if "Retired" in self.dict_projects:
                 self.dict_projects.pop("Retired")
         
         self.dict_locations = self.import_yaml(self.locations_yaml_path)
+
+        # Load FTE tracker YAML
+        try:
+            self.dict_fte_tracker = self.import_yaml(self.fte_tracker_yaml_path)
+        except Exception:
+            self.dict_fte_tracker = {"Main Projects for FTE Tracking": []}
 
 
 
@@ -106,6 +129,7 @@ class Timesheet(tk.Tk):
         self.tab_monthly_fte()
         self.tab_yearly_fte()
         self.tab_config()
+        self.tab_monday_fte()
 
     def import_yaml(self, file_path):
     
@@ -135,6 +159,7 @@ class Timesheet(tk.Tk):
         config = {
             "locations_yaml": self.locations_yaml_path,
             "projects_yaml": self.projects_yaml_path,
+            "fte_tracker_yaml": self.fte_tracker_yaml_path,
             "timesheet_excel": self.timesheet_excel_path
         }
         with open(config_path, "w") as f:
@@ -248,16 +273,16 @@ class Timesheet(tk.Tk):
             # print(key, value)
             if value[3] not in ("", "0", 0):
                 
-                self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["date"], value=calendar_value)
+                self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["date"], value=normalize_date_input(calendar_value))
                 self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["project_nickname"], value=key)
-                self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["project_name"], value=value[1])
+                self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["project_name"], value=value[0])
                 self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["cost_center_name"], value=value[1])
                 self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["cost_center_code"], value=value[2])
-                self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["hrs"], value=value[3])
+                self.timesheet_ws_hrs.cell(row=next_row_hrs, column=self.timesheet_ws_hrs_column_index["hrs"], value=float(value[3]))
 
                 next_row_hrs += 1
         
-        self.timesheet_ws_daily_summaries.cell(row=next_row_daily_summaries, column=self.timesheet_ws_daily_summaries_column_index["date"], value=calendar_value)
+        self.timesheet_ws_daily_summaries.cell(row=next_row_daily_summaries, column=self.timesheet_ws_daily_summaries_column_index["date"], value=normalize_date_input(calendar_value))
         self.timesheet_ws_daily_summaries.cell(row=next_row_daily_summaries, column=self.timesheet_ws_daily_summaries_column_index["location"], value=combobox_location_value)
         self.timesheet_ws_daily_summaries.cell(row=next_row_daily_summaries, column=self.timesheet_ws_daily_summaries_column_index["note"], value=text_summary_value)
 
@@ -350,7 +375,11 @@ class Timesheet(tk.Tk):
                     hrs_val = float(hrs)
                 except ValueError:
                     continue
-                all_data.append((date, cost_center_name, hrs_val))
+                try:
+                    date_obj = normalize_date_input(date)
+                except Exception:
+                    continue
+                all_data.append((date_obj, cost_center_name, hrs_val))
 
         # Find last 4 Mondays
         today = self.today
@@ -373,15 +402,7 @@ class Timesheet(tk.Tk):
             # Build cost_center_name -> {date: sum_hrs}
             agg = {}
             date_set = set(dates)
-            for date, cost_center, hrs in all_data:
-                # Convert date to date object if it's string
-                if isinstance(date, str):
-                    try:
-                        date_obj = pd.to_datetime(date).date()
-                    except Exception:
-                        continue
-                else:
-                    date_obj = date if hasattr(date, 'date') else date
+            for date_obj, cost_center, hrs in all_data:
                 if date_obj in date_set:
                     agg.setdefault(cost_center, {}).setdefault(date_obj, 0)
                     agg[cost_center][date_obj] += hrs
@@ -478,6 +499,221 @@ class Timesheet(tk.Tk):
         except ValueError:
             return False
         
+    def tab_monday_fte(self):
+        tab_fte = tk.Frame(self.notebook)
+        
+        self.notebook.add(tab_fte, text="monday.com FTE")
+        tab_fte.columnconfigure(0, weight=1)
+        tab_fte.rowconfigure(0, weight=1)
+        
+        # Controls
+        controls = tk.Frame(tab_fte)
+        controls.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        controls.columnconfigure(0, weight=1)
+
+        # tk.Label(controls, text="Tracked Projects — Monthly", font=self.font_header).grid(row=0, column=0, sticky="w")
+
+        # Proportional redistribution is always applied
+
+        # Scrollable monthly list
+        canvas = tk.Canvas(tab_fte)
+        scrollbar = ttk.Scrollbar(tab_fte, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        fte_frame = tk.Frame(canvas)
+        fte_frame.columnconfigure(0, weight=1)
+        fte_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=fte_frame, anchor="nw")
+
+        # Initial render
+        self.render_monday_fte_months(fte_frame)
+
+    def render_monday_fte(self, tree):
+        # Clear table
+        for item in tree.get_children():
+            tree.delete(item)
+
+        # Build tracked set
+        tracked_list = []
+        if isinstance(self.dict_fte_tracker, dict):
+            tracked_list = self.dict_fte_tracker.get("Main Projects for FTE Tracking", []) or []
+        elif isinstance(self.dict_fte_tracker, list):
+            tracked_list = self.dict_fte_tracker
+        tracked_names = {d.get("cost_center_name") for d in tracked_list if isinstance(d, dict)}
+
+        # Gather current month hrs by cost_center_name
+        now = self.today
+        month_start = datetime(now.year, now.month, 1).date()
+        # Determine next month start to bound
+        if now.month == 12:
+            next_month_start = datetime(now.year + 1, 1, 1).date()
+        else:
+            next_month_start = datetime(now.year, now.month + 1, 1).date()
+
+        month_hrs = defaultdict(float)
+        total_hrs_month = 0.0
+        untracked_hrs = 0.0
+
+        for row in self.timesheet_ws_hrs.iter_rows(min_row=2, values_only=True):
+            date = row[self.timesheet_ws_hrs_column_index["date"] - 1]
+            cost_center_name = row[self.timesheet_ws_hrs_column_index["cost_center_name"] - 1]
+            hrs = row[self.timesheet_ws_hrs_column_index["hrs"] - 1]
+            if not (date and cost_center_name and hrs):
+                continue
+            try:
+                hrs_val = float(hrs)
+            except Exception:
+                continue
+            # Normalize date
+            if isinstance(date, str):
+                try:
+                    date_obj = pd.to_datetime(date).date()
+                except Exception:
+                    continue
+            else:
+                date_obj = date if hasattr(date, 'date') else date
+
+            if not (month_start <= date_obj < next_month_start):
+                continue
+
+            total_hrs_month += hrs_val
+            if cost_center_name in tracked_names:
+                month_hrs[cost_center_name] += hrs_val
+            else:
+                untracked_hrs += hrs_val
+
+        # Optionally redistribute untracked hours proportionally across tracked
+        if month_hrs:
+            tracked_total = sum(month_hrs.values())
+            if tracked_total > 0 and untracked_hrs > 0:
+                for k in list(month_hrs.keys()):
+                    share = month_hrs[k] / tracked_total
+                    month_hrs[k] += untracked_hrs * share
+
+        # Insert rows
+        idx = 0
+        for cc_name, hrs_val in sorted(month_hrs.items()):
+            percent = (hrs_val / total_hrs_month * 100) if total_hrs_month > 0 else 0
+            hrs_rounded = round(hrs_val)
+            percent_rounded = round(percent)
+            values = [cc_name, f"{hrs_rounded}", f"{percent_rounded}%"]
+            tag = "evenrow" if idx % 2 == 0 else "oddrow"
+            tree.insert("", "end", values=values, tags=(tag,))
+            tree.tag_configure("evenrow", background="#e6f2ff")
+            tree.tag_configure("oddrow", background="#ffffff")
+            idx += 1
+
+        # Total row
+        tree.insert("", "end", values=["Total", f"{round(total_hrs_month)}", "100%"], tags=("totalrow",))
+        tree.tag_configure("totalrow", background="#accda3")
+
+    def render_monday_fte_months(self, fte_frame):
+        # Clear previous month sections
+        for widget in fte_frame.winfo_children():
+            widget.destroy()
+
+        # Build tracked set
+        tracked_list = []
+        if isinstance(self.dict_fte_tracker, dict):
+            tracked_list = self.dict_fte_tracker.get("Main Projects for FTE Tracking", []) or []
+        elif isinstance(self.dict_fte_tracker, list):
+            tracked_list = self.dict_fte_tracker
+        tracked_names = {d.get("cost_center_name") for d in tracked_list if isinstance(d, dict)}
+
+        # Gather all data from Excel
+        all_data = []
+        for row in self.timesheet_ws_hrs.iter_rows(min_row=2, values_only=True):
+            date = row[self.timesheet_ws_hrs_column_index["date"] - 1]
+            cost_center_name = row[self.timesheet_ws_hrs_column_index["cost_center_name"] - 1]
+            hrs = row[self.timesheet_ws_hrs_column_index["hrs"] - 1]
+            if date and cost_center_name and hrs:
+                try:
+                    hrs_val = float(hrs)
+                except ValueError:
+                    continue
+                # Convert date to datetime.date
+                if isinstance(date, str):
+                    try:
+                        date_obj = pd.to_datetime(date).date()
+                    except Exception:
+                        continue
+                else:
+                    date_obj = date if hasattr(date, 'date') else date
+                all_data.append((date_obj, cost_center_name, hrs_val))
+
+        # Aggregate per month
+        month_total_hrs = defaultdict(float)
+        month_untracked_hrs = defaultdict(float)
+        month_tracked_hrs = defaultdict(lambda: defaultdict(float))
+        for date_obj, cc_name, hrs_val in all_data:
+            month = date_obj.strftime('%Y-%m')
+            month_total_hrs[month] += hrs_val
+            if cc_name in tracked_names:
+                month_tracked_hrs[month][cc_name] += hrs_val
+            else:
+                month_untracked_hrs[month] += hrs_val
+
+        # Sort months chronologically (latest first)
+        months_sorted = reversed(sorted(month_total_hrs.keys()))
+
+        for month_idx, month in enumerate(months_sorted):
+            # Redistribute untracked proportionally
+            tracked_dict = month_tracked_hrs[month]
+            total_hrs = month_total_hrs[month]
+            untracked = month_untracked_hrs[month]
+            tracked_total = sum(tracked_dict.values())
+
+            if tracked_total > 0 and untracked > 0:
+                for k in list(tracked_dict.keys()):
+                    share = tracked_dict[k] / tracked_total
+                    tracked_dict[k] += untracked * share
+
+            # Prepare month UI
+            month_dt = datetime.strptime(month, '%Y-%m')
+            month_label = tk.Label(fte_frame, text=f"{month_dt.strftime('%b %Y')}", font=self.font_header)
+            month_label.grid(row=month_idx*2, column=0, columnspan=3, sticky="ew", pady=(10,0))
+
+            columns = ["Cost Center", "Total Hrs", "% of Month"]
+            tree = ttk.Treeview(fte_frame, show="headings", columns=columns, height=10)
+            tree.grid(row=month_idx*2+1, column=0, columnspan=3, sticky="ew", padx=40)
+            for i, col in enumerate(columns):
+                if i == 0:
+                    tree.column(col, anchor="w", width=280, stretch=True)
+                else:
+                    tree.column(col, anchor="center", width=120, stretch=False)
+                tree.heading(col, text=col)
+
+            # Compute percentages and enforce 100% sum
+            percent_map = {}
+            for k, v in tracked_dict.items():
+                percent_map[k] = (v / total_hrs * 100) if total_hrs > 0 else 0
+            rounded_map = {k: int(round(p)) for k, p in percent_map.items()}
+            sum_rounded = sum(rounded_map.values())
+            diff = 100 - sum_rounded
+            if rounded_map and diff != 0:
+                # Adjust the largest percent to fix rounding drift
+                adjust_key = max(percent_map, key=lambda k: percent_map[k])
+                rounded_map[adjust_key] += diff
+
+            # Insert rows
+            for idx, k in enumerate(sorted(tracked_dict.keys())):
+                hrs_val = tracked_dict[k]
+                hrs_rounded = round(hrs_val)
+                percent_val = rounded_map.get(k, 0)
+                values = [k, f"{hrs_rounded}", f"{percent_val}%"]
+                tag = "evenrow" if idx % 2 == 0 else "oddrow"
+                tree.insert("", "end", values=values, tags=(tag,))
+                tree.tag_configure("evenrow", background="#e6f2ff")
+                tree.tag_configure("oddrow", background="#ffffff")
+
+            # Total row
+            tree.insert("", "end", values=["Total", f"{round(total_hrs)}", "100%"], tags=("totalrow",))
+            tree.tag_configure("totalrow", background="#accda3")
 
     def tab_config(self):
         self.tab_config_frame = tk.Frame(self.notebook, bg="lightblue")
@@ -508,12 +744,19 @@ class Timesheet(tk.Tk):
         self.projects_entry.grid(row=r+2, column=c+1, sticky="nsew",padx=10, pady=10)
         tk.Button(self.tab_config_frame, text="Browse", command=self.browse_projects_yaml).grid(row=r+2, column=c+2, sticky="ns",padx=10, pady=10)
 
+        # FTE Tracker YAML
+        tk.Label(self.tab_config_frame, text="FTE Tracker YAML:", font=self.font_normal).grid(row=r+3, column=c, sticky="ns", padx=10, pady=10)
+        self.fte_tracker_entry = tk.Entry(self.tab_config_frame, width=50)
+        self.fte_tracker_entry.insert(0, self.fte_tracker_yaml_path)
+        self.fte_tracker_entry.grid(row=r+3, column=c+1, sticky="nsew",padx=10, pady=10)
+        tk.Button(self.tab_config_frame, text="Browse", command=self.browse_fte_tracker_yaml).grid(row=r+3, column=c+2, sticky="ns",padx=10, pady=10)
+
         # Timesheet Excel
-        tk.Label(self.tab_config_frame, text="Timesheet Excel:", font=self.font_normal).grid(row=r+3, column=c, sticky="ns", padx=10, pady=10)
+        tk.Label(self.tab_config_frame, text="Timesheet Excel:", font=self.font_normal).grid(row=r+4, column=c, sticky="ns", padx=10, pady=10)
         self.excel_entry = tk.Entry(self.tab_config_frame, width=50)
         self.excel_entry.insert(0, self.timesheet_excel_path)
-        self.excel_entry.grid(row=r+3, column=c+1, sticky="nsew",padx=10, pady=10)
-        tk.Button(self.tab_config_frame, text="Browse", command=self.browse_timesheet_excel).grid(row=r+3, column=c+2, sticky="ns",padx=10, pady=10)
+        self.excel_entry.grid(row=r+4, column=c+1, sticky="nsew",padx=10, pady=10)
+        tk.Button(self.tab_config_frame, text="Browse", command=self.browse_timesheet_excel).grid(row=r+4, column=c+2, sticky="ns",padx=10, pady=10)
 
         self.check_config_files()
 
@@ -526,6 +769,9 @@ class Timesheet(tk.Tk):
         # Check projects YAML
         if not os.path.exists(self.projects_yaml_path):
             error_msgs.append("Projects YAML file does not exist.")
+        # Check FTE tracker YAML
+        if not os.path.exists(self.fte_tracker_yaml_path):
+            error_msgs.append("FTE Tracker YAML file does not exist.")
         # Check Excel file
         if not os.path.exists(self.timesheet_excel_path):
             error_msgs.append("Timesheet Excel file does not exist.")
@@ -566,6 +812,24 @@ class Timesheet(tk.Tk):
             self.dict_projects = self.import_yaml(self.projects_yaml_path)
             if "Retired" in self.dict_projects:
                 self.dict_projects.pop("Retired")
+            self.clear_notebook_tabs()
+            self.tab_input()
+            self.tab_display()
+            self.tab_config()
+            self.check_config_files()
+            self.notebook.select(self.notebook.tabs()[-1])
+
+    def browse_fte_tracker_yaml(self):
+        path = filedialog.askopenfilename(title="Select FTE Tracker YAML", filetypes=[("YAML files", "*.yaml")])
+        if path:
+            self.fte_tracker_entry.delete(0, tk.END)
+            self.fte_tracker_entry.insert(0, path)
+            self.fte_tracker_yaml_path = path
+            self.save_config()
+            try:
+                self.dict_fte_tracker = self.import_yaml(self.fte_tracker_yaml_path)
+            except Exception:
+                self.dict_fte_tracker = {"Main Projects for FTE Tracking": []}
             self.clear_notebook_tabs()
             self.tab_input()
             self.tab_display()

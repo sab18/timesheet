@@ -3,8 +3,9 @@ future ideas/fixes:
 [] make yearly look nicer
 [] add plots??
 [] allow . instead of 0.
+[x]issue with project-Name being the same as cost_center name in excel file
 
-V1.0.0:
+v1.0.0:
 FRONT END:
 - input tab
     - input hrs to each project (organized by category from projects.yaml)
@@ -32,3 +33,12 @@ BACK END:
 - projects: project_nickname, project_name, cost_center_name, cost_center_code
 - "db" = Timesheet.xlsx file.  digest can be edited as desired
 - all files autogenerate when initialze.py is run
+
+
+v1.1.0:
+UPDATE for 2026.
+- add FTE tab based on allocations on monday.com
+
+
+v1.1.1:
+- minor bug fix so hours/dates are not inputted as strings of text
